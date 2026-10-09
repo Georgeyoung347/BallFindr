@@ -9,6 +9,7 @@ import {
   buildApnsPayload,
   buildFcmMessage,
   buildJwt,
+  describeError,
   fcmSendUrl,
   isApnsDeadToken,
   isFcmDeadToken,
@@ -19,6 +20,7 @@ import {
   parseServiceAccount,
   pemToDer,
   pushSkipReason,
+  redactToken,
   summarize,
   tokenHint,
   utf8,
@@ -332,4 +334,40 @@ Deno.test("isUuid and tokenHint", () => {
   assertFalse(isUuid(null));
   assertEquals(tokenHint("abcdefghijklmnop"), "abcd…mnop");
   assertEquals(tokenHint("short"), "***");
+});
+
+// ---------------------------------------------------------------------------
+// Error reporting
+
+Deno.test("describeError walks the cause chain and tolerates non-errors", () => {
+  const inner = new Error("error sending request for url (https://api.push.apple.com/3/device/abc): tunnel");
+  const outer = new TypeError("fetch failed", { cause: inner });
+  assertEquals(describeError(outer), `fetch failed <- ${inner.message}`);
+  assertEquals(describeError(new Error("plain")), "plain");
+  assertEquals(describeError("just a string"), "just a string");
+  assertEquals(describeError(undefined), "unknown error");
+  assertEquals(describeError(new Error("")), "Error"); // falls back to the name
+  const loop = new Error("a");
+  loop.cause = loop;
+  assertEquals(describeError(loop), "a"); // cycle is cut off
+  const deep = new Error("1", {
+    cause: new Error("2", { cause: new Error("3", { cause: new Error("4", { cause: new Error("5") }) }) }),
+  });
+  assertEquals(describeError(deep), "1 <- 2 <- 3 <- 4");
+});
+
+Deno.test("redactToken removes raw and url-encoded device tokens", () => {
+  const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const msg = `error sending request for url (https://api.push.apple.com/3/device/${token}): tunnel; token=${token}`;
+  const red = redactToken(msg, token);
+  assertFalse(red.includes(token));
+  assertEquals(
+    red,
+    "error sending request for url (https://api.push.apple.com/3/device/0123…cdef): tunnel; token=0123…cdef",
+  );
+  const fcm = "dQw4w9WgXcQ:APA91bHun4MxP5egoKMwt2KZFBaFUH-1RYqx";
+  assertEquals(redactToken(`bad ${fcm} and ${encodeURIComponent(fcm)}`, fcm), "bad dQw4…RYqx and dQw4…RYqx");
+  assertEquals(redactToken("nothing here", token), "nothing here");
+  assertEquals(redactToken("x short x", "short"), "x *** x");
+  assertEquals(redactToken("untouched", ""), "untouched");
 });

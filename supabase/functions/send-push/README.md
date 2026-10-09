@@ -78,7 +78,10 @@ reads secrets at isolate start, so re-deploy (or wait for a cold start) after ch
 - `deactivated`: the provider said the token is dead (`is_active = false`, `updated_at = now()`): APNs `410` or reasons
   `BadDeviceToken`, `Unregistered`, `DeviceTokenNotForTopic`; FCM `404 UNREGISTERED`, or `400 INVALID_ARGUMENT` that
   names the token.
-- `failed`: anything else (transient provider errors, bad credentials). Logged with `console.error`.
+- `failed`: anything else (transient provider errors, bad credentials). Logged with `console.error`. For a network error
+  the `reason` carries the error and its cause chain (for example
+  `fetch failed <- error sending request for url (https://api.push.apple.com/3/device/0123…cdef): ...`) with the device
+  token already redacted.
 - `skipped`: platform not configured.
 - Early exits use `reason`: `push_disabled`, `already_read`, `no_active_devices`.
 
@@ -92,14 +95,18 @@ deno task check        # type-check
 deno task test         # unit tests for lib.ts (no network needed)
 ```
 
-From the repo root the same thing is `bunx deno check supabase/functions/send-push/index.ts` and
-`bunx deno test supabase/functions/send-push/`.
+From the repo root the same thing is `bunx deno check --no-lock supabase/functions/send-push/index.ts` and
+`bunx deno test --no-lock supabase/functions/send-push/`. Deno looks for its config in the current directory, so from
+the root it sees the website's `package.json` instead of this folder's `deno.json` and, without `--no-lock`, writes a
+stray `deno.lock` at the repo root (delete it if that happens; it must not be committed). CI
+(`.github/workflows/mobile.yml`) runs the `deno task` commands inside this folder.
 
-Serve it locally (needs the local stack or a `.env` file with the secrets):
+Serve it locally (needs the local stack and an env file with the secrets; use `.env.local`, which the repo's
+`.gitignore` already excludes through `*.local`, so real keys never end up in a commit):
 
 ```sh
 supabase start
-supabase functions serve send-push --no-verify-jwt --env-file supabase/functions/.env
+supabase functions serve send-push --no-verify-jwt --env-file supabase/functions/.env.local
 ```
 
 Then, with the local hook secret
@@ -131,6 +138,9 @@ in the Supabase dashboard.
 
 - The APNs provider JWT is cached for 50 minutes per isolate; an `ExpiredProviderToken` / `InvalidProviderToken` answer
   refreshes it and retries once.
+- `APNS_ENV` must match the build that registered the token: APNs answers `BadDeviceToken` when a sandbox (Xcode debug)
+  token is sent to production or vice versa, and that reason **deactivates** the device row. Keep `APNS_ENV=production`
+  for App Store / TestFlight builds and only switch to `sandbox` against a project whose devices all run debug builds.
 - The FCM OAuth2 access token is cached until a minute before it expires; a `401` from FCM clears the cache for the next
   call.
 - Devices are sent to in parallel (`Promise.allSettled`); one device failing never affects another.

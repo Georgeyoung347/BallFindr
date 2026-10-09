@@ -17,6 +17,7 @@ import {
   buildApnsPayload,
   buildFcmMessage,
   buildJwt,
+  describeError,
   type DeviceResult,
   FCM_SCOPE,
   fcmSendUrl,
@@ -34,6 +35,7 @@ import {
   type PushDeviceRow,
   type PushPreferences,
   pushSkipReason,
+  redactToken,
   type ServiceAccount,
   summarize,
   tokenHint,
@@ -224,11 +226,14 @@ async function deliver(device: PushDeviceRow, n: NotificationRow): Promise<Devic
     }
     return { ...base, status: "skipped", reason: "unknown_platform" };
   } catch (e) {
+    // fetch errors quote the request URL, which for APNs contains the device
+    // token: redact it before it reaches the log or the stored response.
+    const detail = redactToken(describeError(e), device.token);
     console.error(
       `send-push: ${device.platform} send failed for device ${device.id} (${tokenHint(device.token)}):`,
-      errMsg(e),
+      detail,
     );
-    return { ...base, status: "failed", reason: errMsg(e).slice(0, 200) };
+    return { ...base, status: "failed", reason: detail.slice(0, 200) };
   }
 }
 
@@ -341,7 +346,7 @@ async function handle(req: Request): Promise<Response> {
       device_id: devices[i].id,
       platform: devices[i].platform,
       status: "failed",
-      reason: errMsg(s.reason).slice(0, 200),
+      reason: redactToken(describeError(s.reason), devices[i].token).slice(0, 200),
     }
   );
 

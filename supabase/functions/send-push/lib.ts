@@ -372,3 +372,39 @@ export function isUuid(v: unknown): v is string {
 export function tokenHint(token: string): string {
   return token.length <= 8 ? "***" : `${token.slice(0, 4)}…${token.slice(-4)}`;
 }
+
+/**
+ * Message of an error followed by its `cause` chain ("fetch failed <- error
+ * sending request for url (...)"), so a failed delivery can be diagnosed from
+ * the log. Non-errors are stringified; cycles and deep chains are cut off.
+ */
+export function describeError(e: unknown, maxDepth = 4): string {
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+  let cur: unknown = e;
+  while (cur !== undefined && cur !== null && parts.length < maxDepth && !seen.has(cur)) {
+    seen.add(cur);
+    if (cur instanceof Error) {
+      parts.push(cur.message || cur.name);
+      cur = cur.cause;
+    } else {
+      parts.push(String(cur));
+      break;
+    }
+  }
+  return parts.join(" <- ") || "unknown error";
+}
+
+/**
+ * Replace every occurrence of a device token (raw or URL-encoded, as it
+ * appears in the APNs request URL that fetch errors quote) with its short
+ * hint, so neither the log line nor the response stored by pg_net carries it.
+ */
+export function redactToken(text: string, token: string): string {
+  if (!token) return text;
+  let out = text;
+  for (const needle of new Set([token, encodeURIComponent(token)])) {
+    if (needle) out = out.split(needle).join(tokenHint(token));
+  }
+  return out;
+}
