@@ -1,0 +1,10 @@
+revoke all on function public.on_conversation_insert() from public, anon, authenticated;
+revoke all on function public.on_conversation_blocked() from public, anon, authenticated;
+revoke all on function public.on_message_insert() from public, anon, authenticated;
+revoke all on function public.enforce_conversation_insert() from public, anon, authenticated;
+revoke all on function public.enforce_conversation_update() from public, anon, authenticated;
+revoke all on function public.enforce_participant_update() from public, anon, authenticated;
+revoke all on function public.enforce_message_insert() from public, anon, authenticated;
+revoke all on function public.enforce_message_update() from public, anon, authenticated;
+revoke execute on function public.messaging_blocked(uuid, uuid) from anon;
+revoke execute on function public.is_conversation_participant(uuid, uuid) from anon;

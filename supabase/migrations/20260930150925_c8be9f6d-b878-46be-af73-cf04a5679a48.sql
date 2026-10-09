@@ -1,0 +1,1 @@
+alter view public.player_cards set (security_barrier = true);

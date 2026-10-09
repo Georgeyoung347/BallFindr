@@ -1,0 +1,1 @@
+revoke execute on function public.cleanup_notifications_before_profile_delete() from public, anon, authenticated;

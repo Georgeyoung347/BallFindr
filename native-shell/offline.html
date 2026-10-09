@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>No connection — BallFindr</title>
+    <style>
+      :root { color-scheme: dark; --bg: #0c0d0f; --fg: #fafafa; --muted: #a1a1aa; --primary: #a3f52d; --primary-fg: #17220d; }
+      html, body { height: 100%; margin: 0; }
+      body { font: 16px/1.5 system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--fg); display: grid; place-items: center; padding: 1.5rem; box-sizing: border-box; }
+      .card { max-width: 22rem; text-align: center; }
+      .brand { font-weight: 800; letter-spacing: -0.02em; font-size: 1.5rem; margin-bottom: 2rem; }
+      .brand span { color: var(--primary); }
+      h1 { font-size: 1.25rem; margin: 0 0 0.5rem; }
+      p { color: var(--muted); margin: 0 0 1.75rem; }
+      button { background: var(--primary); color: var(--primary-fg); border: 0; border-radius: 0.5rem; padding: 0.75rem 1.5rem; font: inherit; font-weight: 600; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="brand">Ball<span>Findr</span></div>
+      <h1>No connection</h1>
+      <p>Please check your internet connection and try again.</p>
+      <button type="button" onclick="location.href='https://ballfindr.co.uk'">Try again</button>
+    </div>
+  </body>
+</html>

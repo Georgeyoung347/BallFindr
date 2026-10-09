@@ -1,0 +1,1 @@
+revoke insert, update, delete on public.message_blocks from authenticated, anon;

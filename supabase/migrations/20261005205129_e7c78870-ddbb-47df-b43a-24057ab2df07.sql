@@ -1,0 +1,2 @@
+DROP POLICY "Players can create their own applications" ON public.applications;
+CREATE POLICY "Players can create their own applications" ON public.applications FOR INSERT TO authenticated WITH CHECK (auth.uid() = player_id AND private.profile_is_type(auth.uid(), 'player'::account_type));

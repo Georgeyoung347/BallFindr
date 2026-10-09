@@ -1,0 +1,1 @@
+CREATE POLICY "No member access" ON public.email_reverifications FOR ALL TO authenticated USING (false) WITH CHECK (false);

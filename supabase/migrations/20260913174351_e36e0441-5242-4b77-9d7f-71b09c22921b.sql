@@ -1,0 +1,2 @@
+ALTER TABLE public.players ADD COLUMN IF NOT EXISTS height_inches smallint;
+ALTER TABLE public.players ADD CONSTRAINT players_height_inches_range CHECK (height_inches IS NULL OR (height_inches >= 48 AND height_inches <= 90));

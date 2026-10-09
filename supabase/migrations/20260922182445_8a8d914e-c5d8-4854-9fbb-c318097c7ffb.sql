@@ -1,0 +1,1 @@
+ALTER TYPE public.football_section ADD VALUE IF NOT EXISTS 'both';

@@ -1,0 +1,1 @@
+DROP TRIGGER IF EXISTS protect_clubs_football_section ON public.clubs;

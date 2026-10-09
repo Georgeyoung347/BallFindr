@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">BallFindr</string>
+    <string name="title_activity_main">BallFindr</string>
+    <string name="package_name">uk.co.ballfindr.app</string>
+    <string name="custom_url_scheme">uk.co.ballfindr.app</string>
+</resources>
