@@ -101,15 +101,24 @@ function RestrictionCard({ profileId, name, isAdminUser }: { profileId: string; 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["admin"] });
 
   const apply = useMutation({
-    mutationFn: (input: { kind: "temporary" | "permanent" }) =>
-      restrict({
+    mutationFn: async (input: { kind: "temporary" | "permanent" }) => {
+      let expiry: string | undefined;
+      if (input.kind === "temporary") {
+        // datetime-local has no zone: new Date() reads it in the admin's local
+        // time (e.g. BST), toISOString() sends the exact UTC instant to the Worker.
+        const when = new Date(expiresAt);
+        if (Number.isNaN(when.getTime())) throw new Error("That expiry date isn't valid");
+        expiry = when.toISOString();
+      }
+      return restrict({
         data: {
           profileId,
           kind: input.kind,
-          ...(input.kind === "temporary" ? { expiresAt } : {}),
+          ...(expiry ? { expiresAt: expiry } : {}),
           ...(reason.trim() ? { reason } : {}),
         },
-      }),
+      });
+    },
     onSuccess: () => {
       toast.success("Account restricted");
       setReason("");

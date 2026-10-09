@@ -47,7 +47,13 @@ export function PlayerMediaGallery({
     const onDown = (e: PointerEvent) => {
       if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) setPickerFor(null);
     };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setPickerFor(null);
+    // preventDefault marks the Escape as handled so the Android back button
+    // (lib/native-ui) closes the picker instead of navigating back.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      setPickerFor(null);
+    };
     document.addEventListener("pointerdown", onDown);
     document.addEventListener("keydown", onKey);
     return () => {

@@ -5,6 +5,18 @@
  * browser with MediaRecorder before they ever reach Supabase Storage, so the
  * uploaded file always fits inside the 50 MB storage limit. No server, no
  * extra dependency, no second media system.
+ *
+ * Audio: the source <video> starts muted, so the clip never plays aloud and
+ * muted playback is allowed without a fresh tap (iOS rejects unmuted play()
+ * after an await). The soundtrack is recorded from
+ *  - video.captureStream() where it exists (Chromium incl. the Android app);
+ *    captured tracks ignore the element's mute, per the capture spec, or
+ *  - Web Audio (createMediaElementSource -> MediaStreamDestination) where it
+ *    doesn't (WebKit: Safari and the iOS app). Once the element is routed into
+ *    the graph, which is never connected to the speakers, it is unmuted so real
+ *    samples flow; if unmuted play() is refused it falls back to muted. If no
+ *    running AudioContext can be had, the clip is compressed without sound
+ *    rather than failing.
  */
 
 /** Target output size, kept below the 50 MB storage limit as a safety margin. */
@@ -51,8 +63,13 @@ function loadVideo(file: File): Promise<{ video: HTMLVideoElement; revoke: () =>
     const url = URL.createObjectURL(file);
     const video = document.createElement("video");
     video.preload = "auto";
+    // muted (property + attribute) keeps playback silent and lets iOS play it
+    // without a user gesture; playsinline stops iPhone going fullscreen.
+    video.muted = true;
+    video.defaultMuted = true;
+    video.setAttribute("muted", "");
     video.playsInline = true;
-    video.volume = 0;
+    video.setAttribute("playsinline", "");
     video.onloadeddata = () => resolve({ video, revoke: () => URL.revokeObjectURL(url) });
     video.onerror = () => {
       URL.revokeObjectURL(url);
@@ -68,6 +85,51 @@ interface EncodeOptions {
   videoBitsPerSecond: number;
   onProgress?: ((fraction: number) => void) | undefined;
   signal?: AbortSignal | undefined;
+  /** Web Audio context for browsers without HTMLMediaElement.captureStream (WebKit). */
+  audioContext?: AudioContext | null | undefined;
+}
+
+type CapturableVideo = HTMLVideoElement & { captureStream?: () => MediaStream };
+
+/** Chromium/Android expose element capture; WebKit (Safari, iOS app) doesn't. */
+function hasElementCapture(): boolean {
+  return (
+    typeof HTMLMediaElement !== "undefined" &&
+    typeof (HTMLMediaElement.prototype as Partial<CapturableVideo>).captureStream === "function"
+  );
+}
+
+/**
+ * Creates the AudioContext used to record the soundtrack on WebKit, or null
+ * (no Web Audio, creation refused, ...), in which case the output is video-only.
+ */
+function createAudioContext(): AudioContext | null {
+  try {
+    if (typeof window === "undefined") return null;
+    const Ctor =
+      window.AudioContext ??
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctor) return null;
+    const ctx = new Ctor();
+    if (typeof ctx.createMediaStreamDestination !== "function") {
+      void ctx.close().catch(() => undefined);
+      return null;
+    }
+    return ctx;
+  } catch {
+    return null;
+  }
+}
+
+/** Tries to get the context running; resolves false if it stays suspended (no user gesture). */
+async function ensureRunning(ctx: AudioContext): Promise<boolean> {
+  if (ctx.state === "running") return true;
+  try {
+    await Promise.race([ctx.resume(), new Promise((resolve) => setTimeout(resolve, 500))]);
+  } catch {
+    /* treated as not running */
+  }
+  return (ctx.state as string) === "running";
 }
 
 async function encodeOnce({
@@ -76,6 +138,7 @@ async function encodeOnce({
   videoBitsPerSecond,
   onProgress,
   signal,
+  audioContext,
 }: EncodeOptions): Promise<Blob> {
   const mimeType = pickMimeType();
   if (!mimeType) throw new Error("This browser can't compress video. Try Chrome, Edge or Safari.");
@@ -92,9 +155,32 @@ async function encodeOnce({
   }
 
   const stream = canvas.captureStream(30);
-  // Keep the original soundtrack when the browser exposes one.
-  const source = (video as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream?.();
-  source?.getAudioTracks().forEach((track) => stream.addTrack(track));
+  // Keep the original soundtrack (see the header comment for which path runs where).
+  let source: MediaStream | undefined;
+  let audioNode: MediaElementAudioSourceNode | undefined;
+  const capture = (video as CapturableVideo).captureStream;
+  if (typeof capture === "function") {
+    try {
+      source = capture.call(video);
+      source.getAudioTracks().forEach((track) => stream.addTrack(track));
+    } catch {
+      /* video-only */
+    }
+  } else if (audioContext && (await ensureRunning(audioContext))) {
+    try {
+      audioNode = audioContext.createMediaElementSource(video);
+      const destination = audioContext.createMediaStreamDestination();
+      // Deliberately not connected to audioContext.destination: recorded, never heard.
+      audioNode.connect(destination);
+      destination.stream.getAudioTracks().forEach((track) => stream.addTrack(track));
+      // Now that the element's sound only goes into the graph (inaudible), unmute
+      // it: a muted element can feed silence into Web Audio. If unmuted play() is
+      // refused (Safari without a fresh tap), playback below retries muted.
+      video.muted = false;
+    } catch {
+      /* video-only */
+    }
+  }
 
   const recorder = new MediaRecorder(stream, {
     mimeType,
@@ -112,6 +198,11 @@ async function encodeOnce({
       cancelAnimationFrame(raf);
       stream.getTracks().forEach((t) => t.stop());
       source?.getTracks().forEach((t) => t.stop());
+      try {
+        audioNode?.disconnect();
+      } catch {
+        /* already disconnected */
+      }
       video.pause();
       video.removeAttribute("src");
       video.load();
@@ -150,16 +241,25 @@ async function encodeOnce({
       if (recorder.state !== "inactive") recorder.stop();
     };
 
+    const start = () => {
+      recorder.start(1000);
+      draw();
+    };
+    const fail = () => {
+      cleanup();
+      reject(new Error("Compressing this video failed. Try a shorter or smaller clip."));
+    };
+
     video.currentTime = 0;
     video
       .play()
-      .then(() => {
-        recorder.start(1000);
-        draw();
-      })
+      .then(start)
       .catch(() => {
-        cleanup();
-        reject(new Error("Compressing this video failed. Try a shorter or smaller clip."));
+        if (video.muted) return fail();
+        // Unmuted playback refused: muted playback is always allowed (the
+        // soundtrack may then be silent, but the clip still compresses).
+        video.muted = true;
+        video.play().then(start).catch(fail);
       });
   });
 }
@@ -182,18 +282,38 @@ export async function compressVideo(
   let videoBitrate = Math.round(budgetBits / seconds) - AUDIO_BITS_PER_SECOND;
   videoBitrate = Math.min(MAX_VIDEO_BITS_PER_SECOND, Math.max(MIN_VIDEO_BITS_PER_SECOND, videoBitrate));
 
-  let blob = await encodeOnce({ file, durationSeconds: seconds, videoBitsPerSecond: videoBitrate, onProgress, signal });
-
-  if (blob.size > COMPRESSION_TARGET_BYTES) {
-    const ratio = COMPRESSION_TARGET_BYTES / blob.size;
-    const retryBitrate = Math.max(MIN_VIDEO_BITS_PER_SECOND, Math.round(videoBitrate * ratio * 0.9));
+  // Created before the first await so a caller still inside a tap unlocks it
+  // on Safari; the iOS app allows Web Audio without a gesture anyway.
+  const audioContext = hasElementCapture() ? null : createAudioContext();
+  let blob: Blob;
+  try {
+    if (audioContext) void audioContext.resume().catch(() => undefined);
     blob = await encodeOnce({
       file,
       durationSeconds: seconds,
-      videoBitsPerSecond: retryBitrate,
+      videoBitsPerSecond: videoBitrate,
       onProgress,
       signal,
+      audioContext,
     });
+
+    if (blob.size > COMPRESSION_TARGET_BYTES) {
+      const ratio = COMPRESSION_TARGET_BYTES / blob.size;
+      const retryBitrate = Math.max(
+        MIN_VIDEO_BITS_PER_SECOND,
+        Math.round(videoBitrate * ratio * 0.9),
+      );
+      blob = await encodeOnce({
+        file,
+        durationSeconds: seconds,
+        videoBitsPerSecond: retryBitrate,
+        onProgress,
+        signal,
+        audioContext,
+      });
+    }
+  } finally {
+    if (audioContext) void audioContext.close().catch(() => undefined);
   }
 
   if (blob.size > COMPRESSION_TARGET_BYTES) {

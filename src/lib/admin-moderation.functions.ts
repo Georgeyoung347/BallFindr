@@ -10,10 +10,19 @@
  */
 
 import { createServerFn } from "@tanstack/react-start";
+import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { requireModeratorContext } from "./admin.functions";
 
 export type RestrictionKind = "temporary" | "permanent";
+
+/**
+ * Restriction expiry as sent by the admin UI: a full ISO-8601 instant with an
+ * offset (the browser converts the admin's local datetime-local value with
+ * toISOString()). Offset-less "YYYY-MM-DDTHH:mm" values from older clients are
+ * still accepted and, as before, read as UTC by the Worker.
+ */
+const expiresAtSchema = z.string().max(64).datetime({ offset: true, local: true });
 
 export interface AdminRestriction {
   id: string;
@@ -125,9 +134,14 @@ export const restrictAccount = createServerFn({ method: "POST" })
       }
       if (data.kind === "temporary") {
         if (!data.expiresAt) throw new Error("A temporary restriction needs an expiry date and time");
+        if (!expiresAtSchema.safeParse(data.expiresAt).success) {
+          throw new Error("That expiry date isn't valid");
+        }
         const when = new Date(data.expiresAt).getTime();
         if (Number.isNaN(when)) throw new Error("That expiry date isn't valid");
         if (when <= Date.now()) throw new Error("The expiry must be in the future");
+        // Normalise to a UTC instant so storage and the audit note agree.
+        return { ...data, expiresAt: new Date(when).toISOString() };
       }
       return data;
     },

@@ -41,21 +41,45 @@ export const Route = createFileRoute("/auth")({
 const field =
   "w-full rounded-xl border border-border bg-elevated/60 px-3.5 py-2.5 text-base md:text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary";
 
-/** True when the given date of birth is 16 years ago or earlier. */
-function isAtLeast16(value: string): boolean {
-  if (!value) return false;
-  const dob = new Date(value);
-  if (Number.isNaN(dob.getTime())) return false;
-  const cutoff = new Date();
-  cutoff.setFullYear(cutoff.getFullYear() - 16);
-  return dob <= cutoff;
+/** Days in a calendar month (month is 1-12). */
+function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
-/** Latest date of birth that still meets the 16+ requirement. */
-function maxDateOfBirth(): string {
-  const cutoff = new Date();
-  cutoff.setFullYear(cutoff.getFullYear() - 16);
-  return cutoff.toISOString().slice(0, 10);
+/**
+ * Parses a date input's "YYYY-MM-DD" into plain calendar parts. Deliberately
+ * not new Date(value): that reads it as UTC midnight, which is the previous
+ * evening in UK summer time and shifts the birthday by a day.
+ */
+function parseDateOnly(value: string): { y: number; m: number; d: number } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const y = Number(match[1]);
+  const m = Number(match[2]);
+  const d = Number(match[3]);
+  if (m < 1 || m > 12 || d < 1 || d > daysInMonth(y, m)) return null;
+  return { y, m, d };
+}
+
+/** True when the date of birth is 16 years ago or earlier in the user's local calendar. */
+function isAtLeast16(value: string, today: Date = new Date()): boolean {
+  const dob = parseDateOnly(value);
+  if (!dob) return false;
+  const y = today.getFullYear();
+  const m = today.getMonth() + 1;
+  const d = today.getDate();
+  // Birthday not reached yet this year (a 29 Feb birthday counts from 1 Mar).
+  const beforeBirthday = m < dob.m || (m === dob.m && d < dob.d);
+  return y - dob.y - (beforeBirthday ? 1 : 0) >= 16;
+}
+
+/** Latest date of birth (local "YYYY-MM-DD") that still meets the 16+ requirement. */
+function maxDateOfBirth(today: Date = new Date()): string {
+  const y = today.getFullYear() - 16;
+  const m = today.getMonth() + 1;
+  const d = Math.min(today.getDate(), daysInMonth(y, m));
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${y}-${pad(m)}-${pad(d)}`;
 }
 
 function AuthPage() {
