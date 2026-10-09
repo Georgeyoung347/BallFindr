@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- BallFindr brand palette (src/styles.css). The three AppCompat names override the
+         indigo/pink placeholders that the Capacitor runtime library (:capacitor-android)
+         ships under the same names, which is where styles.xml used to resolve them from.
+         Keep these in sync with capacitor.config.ts (backgroundColor) and the iOS
+         LaunchScreen.storyboard background. -->
+    <color name="colorPrimary">#0C0D0F</color>
+    <color name="colorPrimaryDark">#0C0D0F</color>
+    <color name="colorAccent">#A3F52D</color>
+
+    <!-- Named brand tokens for themes/drawables. -->
+    <color name="brand_background">#0C0D0F</color>
+    <color name="brand_accent">#A3F52D</color>
+    <color tools:ignore="UnusedResources" name="brand_foreground">#FAFAFA</color>
+</resources>

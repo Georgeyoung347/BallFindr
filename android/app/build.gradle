@@ -7,6 +7,10 @@ android {
         applicationId "uk.co.ballfindr.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
+        // Store version. Bump BOTH for every Play upload: versionCode must increase
+        // monotonically (integer, never reused); versionName is the user-facing string.
+        // Mirror versionName in ios/App/App.xcodeproj (MARKETING_VERSION) and bump
+        // CURRENT_PROJECT_VERSION there like versionCode.
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"

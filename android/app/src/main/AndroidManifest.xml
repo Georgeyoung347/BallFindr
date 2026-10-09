@@ -38,4 +38,8 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 13+ runtime permission the push-notifications plugin requests; neither the
+         plugin nor its manifest declares it, so it must be declared here or the request is
+         silently denied. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>

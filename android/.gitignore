@@ -99,3 +99,16 @@ app/src/main/assets/public
 app/src/main/assets/capacitor.config.json
 app/src/main/assets/capacitor.plugins.json
 app/src/main/res/xml/config.xml
+
+# BallFindr additions
+# Kotlin 2 compiler session data written next to the project by AGP builds
+.kotlin/
+# Android Studio "Build APK/Bundle" output folders (incl. output-metadata.json)
+app/release/
+app/debug/
+# Release signing material must never be committed (public repo); CI gets it from secrets
+*.jks
+*.keystore
+keystore.properties
+# Firebase config for push is injected by CI from a secret; keep local copies out of git
+app/google-services.json

@@ -1,0 +1,273 @@
+# BallFindr mobile CI
+#
+# This workflow is the only place the native apps get compiled: the Capacitor
+# shell is a thin wrapper around https://ballfindr.co.uk (capacitor.config.ts
+# server.url), nothing from src/ is bundled into the binaries, and the
+# development sandbox has neither Xcode nor an Android SDK. Four independent
+# jobs, each proving one thing:
+#
+#   web             The website (the single source of truth) still type-checks
+#                   and builds for Cloudflare Workers, and capacitor.config.ts
+#                   plus the installed plugins form a valid Capacitor project
+#                   (`cap sync` for both platforms needs no native toolchain).
+#                   ESLint runs but cannot block yet; see the step comment.
+#   edge-functions  The send-push Supabase Edge Function type-checks, lints and
+#                   passes its unit tests under Deno 2.
+#   android         The Android project builds a debug APK with the pinned
+#                   toolchain (JDK 21, compileSdk 36, AGP 8.13, Gradle 8.14.3
+#                   wrapper). The APK is uploaded as a workflow artifact.
+#   ios             The iOS project resolves its Swift packages (CapApp-SPM ->
+#                   capacitor-swift-pm plus the local plugin packages inside
+#                   node_modules, so `bun install` must come first) and compiles
+#                   for the iOS Simulator without code signing. The .app bundle
+#                   is uploaded as a workflow artifact.
+#
+# Nothing here signs, archives or ships a build: release signing needs Apple and
+# Google credentials that are deliberately not in this repository.
+name: Mobile
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned to the Bun that wrote bun.lock so `--frozen-lockfile` stays stable
+  # (a different Bun minor may want to rewrite the lockfile format and fail).
+  BUN_VERSION: "1.4.2"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  web:
+    name: Web (typecheck, build, cap sync)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Type check
+        run: bunx tsc --noEmit
+
+      # `eslint .` already fails on committed code that predates this workflow
+      # (about 3,600 prettier/prettier errors across roughly 160 files, plus a
+      # few no-explicit-any), so it cannot gate merges yet. It still runs so the
+      # log shows the current count. Remove `continue-on-error` once
+      # `bun run format` has been applied and `bun run lint` is clean.
+      - name: Lint (non-blocking until the pre-existing errors are fixed)
+        run: bun run lint
+        continue-on-error: true
+
+      - name: Build website (Cloudflare Workers target)
+        run: bun run build
+
+      # Validates capacitor.config.ts, copies native-shell/ into both native
+      # projects and regenerates the plugin wiring (capacitor.settings.gradle,
+      # CapApp-SPM/Package.swift). Works on Linux: no Xcode or SDK involved.
+      - name: Capacitor sync (both platforms)
+        run: bunx cap sync
+
+  edge-functions:
+    name: Edge function (send-push)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+        # Run from the function directory so its deno.json (compiler options,
+        # import map, lint config) is the one Deno picks up.
+        working-directory: supabase/functions/send-push
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Type check
+        run: deno check index.ts lib.ts lib_test.ts
+
+      - name: Lint
+        run: deno lint
+
+      - name: Unit tests
+        run: deno test .
+
+  android:
+    name: Android (debug APK)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # Installs the Android command-line tools and accepts the SDK licenses.
+      # The ubuntu image also ships an SDK, but the components the Gradle
+      # project needs (variables.gradle: compileSdk 36, AGP 8.13 -> build-tools
+      # 36.0.0) are pinned explicitly here and again in the next step.
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-36 build-tools;36.0.0 platform-tools"
+
+      - name: Pin Android SDK components
+        run: |
+          (yes || true) | sdkmanager --licenses > /dev/null
+          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          sdkmanager --list_installed
+
+      # Gradle dependency/wrapper caching. Also validates the committed
+      # gradle-wrapper.jar checksum against the official 8.14.3 release.
+      - uses: gradle/actions/setup-gradle@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Generates the gitignored pieces the Gradle build needs:
+      # android/capacitor-cordova-android-plugins/, the copied web assets and
+      # app/src/main/assets/capacitor.config.json, and refreshes
+      # capacitor.settings.gradle / app/capacitor.build.gradle.
+      - name: Capacitor sync (android)
+        run: bunx cap sync android
+
+      # app/build.gradle applies the google-services plugin inside a try/catch,
+      # so the absent google-services.json (push credentials) does not break
+      # this build; it only means push notifications are inert in this APK.
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ballfindr-android-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  ios:
+    name: iOS (simulator build)
+    # macos-26 ships Xcode 26 as its default toolchain, which is what the
+    # Capacitor 8 docs ask for. The project itself is undemanding (iOS 15
+    # deployment target, swift-tools-version 5.9, and the Capacitor iOS sources
+    # use nothing newer than iOS 16.4 APIs), so any Xcode >= 16 compiles it.
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # Keeps the job working if the runner label is ever moved back to
+      # macos-15 (default Xcode 16.4, with Xcode 26.x installed alongside):
+      # switch to the newest Xcode 26.x when the default is older.
+      - name: Select Xcode
+        run: |
+          major="$(xcodebuild -version | awk 'NR == 1 { print int($2) }')"
+          if [ "$major" -lt 26 ]; then
+            newest="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1 || true)"
+            if [ -n "$newest" ]; then
+              sudo xcode-select -s "$newest/Contents/Developer"
+            fi
+          fi
+          xcode-select -p
+          xcodebuild -version
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # CapApp-SPM/Package.swift points at ../../../node_modules/@capacitor/*,
+      # so the plugin packages only exist after this step.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Copies native-shell/ into App/App/public, writes capacitor.config.json
+      # and regenerates CapApp-SPM/Package.swift from the installed plugins.
+      - name: Capacitor sync (ios)
+        run: bunx cap sync ios
+
+      # The scheme is Xcode's auto-created "App" scheme (no shared scheme is
+      # committed); it is the same `-project ... -scheme App` invocation the
+      # Capacitor CLI itself uses. DerivedData lives in ios/App/build, which
+      # ios/.gitignore already excludes.
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -derivedDataPath ios/App/build
+
+      - name: Build for iOS Simulator (unsigned)
+        run: |
+          set -o pipefail
+          mkdir -p ios/App/build
+          build() {
+            xcodebuild \
+              -project ios/App/App.xcodeproj \
+              -scheme App \
+              -configuration Debug \
+              -sdk iphonesimulator \
+              -destination 'generic/platform=iOS Simulator' \
+              -derivedDataPath ios/App/build \
+              -skipPackagePluginValidation \
+              -skipMacroValidation \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY= \
+              build
+          }
+          # xcbeautify is preinstalled on GitHub's macOS images; fall back to
+          # the raw log if it is ever missing. The raw log is kept either way.
+          if command -v xcbeautify > /dev/null 2>&1; then
+            build | tee ios/App/build/xcodebuild.log | xcbeautify
+          else
+            build | tee ios/App/build/xcodebuild.log
+          fi
+
+      # upload-artifact does not preserve executable bits, so zip the bundle
+      # first (ditto keeps them) to get a runnable simulator app back.
+      - name: Package simulator app
+        run: |
+          app="ios/App/build/Build/Products/Debug-iphonesimulator/App.app"
+          test -d "$app"
+          ditto -c -k --keepParent "$app" ios/App/build/BallFindr-ios-simulator.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ballfindr-ios-simulator-app
+          path: ios/App/build/BallFindr-ios-simulator.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload raw xcodebuild log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-xcodebuild-log
+          path: ios/App/build/xcodebuild.log
+          if-no-files-found: ignore
+          retention-days: 7

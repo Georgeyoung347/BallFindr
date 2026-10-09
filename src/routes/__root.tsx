@@ -16,6 +16,7 @@ import type { ErrorComponentProps } from "@tanstack/react-router";
 import appCss from "../styles.css?url";
 import { Toaster } from "../components/ui/sonner";
 import { reportLovableError } from "../lib/lovable-error-reporting";
+import { initNativeUI } from "../lib/native-ui";
 
 const themeScript = `(function(){try{var t=localStorage.getItem('ballfindr-theme');var v=t==='light'?'light':'dark';document.documentElement.classList.remove('light','dark');document.documentElement.classList.add(v);document.documentElement.style.colorScheme=v;}catch(e){document.documentElement.classList.add('dark');document.documentElement.style.colorScheme='dark';}})();`;
 
@@ -140,6 +141,12 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+
+  // Native app shell only (splash, theme-aware status bar, Android back button);
+  // a no-op in browsers. Lives here so it runs on every page, landing page included.
+  useEffect(() => {
+    initNativeUI();
+  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>

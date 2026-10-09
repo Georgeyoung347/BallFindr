@@ -260,3 +260,32 @@
 @utility rise-in {
   animation: rise-in 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
 }
+
+/*
+ * Native app shell only (Capacitor on iOS/Android). src/lib/native-ui.ts adds
+ * `capacitor-native` to <html> when the site runs inside the app, so the normal
+ * website never matches these rules. In the app the status and navigation bars
+ * overlay the page edge-to-edge (viewport-fit=cover is set in routes/__root),
+ * so env(safe-area-inset-*) is non-zero: the sticky headers and the bottom nav
+ * already pad top/bottom; this covers the sides (notch in landscape) and the
+ * top-centre toasts, and removes the browser tap flash.
+ */
+html.capacitor-native {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html.capacitor-native body {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* Sonner toasts (position="top-center") must clear the status bar / Dynamic Island. */
+html.capacitor-native [data-sonner-toaster][data-y-position="top"] {
+  top: calc(var(--offset-top) + env(safe-area-inset-top));
+}
+
+@media (max-width: 600px) {
+  html.capacitor-native [data-sonner-toaster][data-y-position="top"] {
+    top: calc(var(--mobile-offset-top) + env(safe-area-inset-top));
+  }
+}

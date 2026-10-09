@@ -11,3 +11,17 @@ capacitor-cordova-ios-plugins
 # Generated Config files
 App/App/capacitor.config.json
 App/App/config.xml
+
+# BallFindr additions
+# Archive/export outputs
+*.ipa
+*.xcarchive
+*.dSYM
+*.dSYM.zip
+# Signing material must never be committed (public repo); CI gets it from secrets
+*.mobileprovision
+*.p12
+*.cer
+*.certSigningRequest
+# Local SPM build products
+App/.build

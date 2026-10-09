@@ -1,1 +1,7 @@
 project_id = "rnkybpumgsihkwfwexsv"
+
+[functions.send-push]
+# Called by the notifications_after_insert_push trigger via pg_net with a shared
+# secret header (x-push-hook-secret) and no JWT; the function validates the
+# secret itself through public.push_hook_secret_ok.
+verify_jwt = false
