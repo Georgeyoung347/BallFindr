@@ -1,7 +1,12 @@
 # Beta and production releases.
 #
-# Push a tag like v0.1.0-beta.1 (beta, published as a GitHub pre-release) or
-# v0.1.0 (final). The tag sets the app version on both platforms:
+# Two ways to release:
+#   1. Edit the VERSION file (e.g. 0.1.0-beta.2) and push. The workflow creates
+#      the tag v<VERSION> and the release. Pushes that leave VERSION unchanged,
+#      or name a version that is already released, do nothing.
+#   2. Push a tag like v0.1.0-beta.1 yourself.
+# Betas (-beta.N) are published as GitHub pre-releases. The version sets the
+# app version on both platforms:
 #   versionName / MARKETING_VERSION  <- tag without the leading "v"
 #   versionCode / build number       <- MAJOR*1000000 + MINOR*10000 + PATCH*100 + BETA
 #                                       (final release uses 99)
@@ -20,6 +25,8 @@ name: Release
 on:
   push:
     tags: ["v*"]
+    branches: ["**"]
+    paths: ["VERSION"]
 
 permissions:
   contents: write
@@ -33,19 +40,36 @@ env:
 
 jobs:
   version:
-    name: Parse version from tag
+    name: Resolve version
     runs-on: ubuntu-latest
     outputs:
+      tag: ${{ steps.v.outputs.tag }}
       name: ${{ steps.v.outputs.name }}
       short: ${{ steps.v.outputs.short }}
       code: ${{ steps.v.outputs.code }}
       prerelease: ${{ steps.v.outputs.prerelease }}
+      skip: ${{ steps.v.outputs.skip }}
     steps:
+      - uses: actions/checkout@v4
+
       - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          tag="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="v$(tr -d '[:space:]' < VERSION)"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release $tag already exists; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
           if [[ ! "$tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-beta\.([0-9]+))?$ ]]; then
-            echo "::error::Tag '$tag' must look like v0.1.0 or v0.1.0-beta.1"; exit 1
+            echo "::error::Version '$tag' must look like v0.1.0 or v0.1.0-beta.1"; exit 1
           fi
           major=${BASH_REMATCH[1]}; minor=${BASH_REMATCH[2]}; patch=${BASH_REMATCH[3]}; beta=${BASH_REMATCH[5]}
           if [ -n "$beta" ]; then
@@ -64,6 +88,7 @@ jobs:
   android:
     name: Android release APK
     needs: version
+    if: needs.version.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -131,6 +156,7 @@ jobs:
   ios:
     name: iOS Simulator build
     needs: version
+    if: needs.version.outputs.skip != 'true'
     runs-on: macos-26
     timeout-minutes: 60
     steps:
@@ -211,6 +237,8 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: BallFindr ${{ needs.version.outputs.name }}
           prerelease: ${{ needs.version.outputs.prerelease == 'true' }}
           body_path: notes.md
