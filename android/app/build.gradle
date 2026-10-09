@@ -41,6 +41,9 @@ dependencies {
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
+    // Test-only: aligns kotlin-stdlib-jdk7/jdk8 (pulled in at 1.6.x by test libraries)
+    // with kotlin-stdlib so the test APK has no duplicate Kotlin classes.
+    androidTestImplementation platform("org.jetbrains.kotlin:kotlin-bom:1.8.22")
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
