@@ -30,3 +30,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local Deno runs from the repo root
+deno.lock
+
+# Local secrets for `supabase functions serve --env-file` (never commit real keys)
+supabase/functions/.env
+supabase/.env
