@@ -18,8 +18,9 @@
 # each release has a different signature, so testers must uninstall the
 # previous beta before installing the next one.
 #
-# iOS: installable iPhone builds need an Apple Developer account (TestFlight).
-# Until then the release carries the Simulator build for Mac/Xcode testing.
+# iOS: every release carries an unsigned device IPA (for sideloading tools) and
+# the Simulator build. With the IOS_* signing secrets (see the ios-device job) it
+# also carries a signed IPA. App Store / TestFlight needs an Apple Developer account.
 name: Release
 
 on:
@@ -211,9 +212,129 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
+  ios-device:
+    name: iOS device IPA
+    needs: version
+    if: needs.version.outputs.skip != 'true'
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      HAS_SIGNING: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 != '' && secrets.IOS_PROVISIONING_PROFILE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          major="$(xcodebuild -version | awk 'NR == 1 { print int($2) }')"
+          if [ "$major" -lt 26 ]; then
+            newest="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1 || true)"
+            if [ -n "$newest" ]; then sudo xcode-select -s "$newest/Contents/Developer"; fi
+          fi
+          xcodebuild -version
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Capacitor sync (ios)
+        run: bunx cap sync ios
+
+      # Device (arm64) build without signing. The result is packaged as an
+      # unsigned IPA that sideloading tools (Sideloadly, AltStore) sign with
+      # the installer's own Apple ID.
+      - name: Build for iPhone (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild -resolvePackageDependencies -project ios/App/App.xcodeproj -scheme App -derivedDataPath ios/App/build
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath ios/App/build \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            MARKETING_VERSION="${{ needs.version.outputs.short }}" \
+            CURRENT_PROJECT_VERSION="${{ needs.version.outputs.code }}" \
+            build
+          app="ios/App/build/Build/Products/Release-iphoneos/App.app"
+          test -d "$app"
+          lipo -info "$app/App"
+          /usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" -c "Print CFBundleShortVersionString" -c "Print CFBundleVersion" "$app/Info.plist"
+          rm -rf ipa-unsigned && mkdir -p ipa-unsigned/Payload dist
+          ditto "$app" ipa-unsigned/Payload/App.app
+          (cd ipa-unsigned && zip -qry "../dist/BallFindr-${{ needs.version.outputs.name }}-ios-unsigned.ipa" Payload)
+          unzip -l "dist/BallFindr-${{ needs.version.outputs.name }}-ios-unsigned.ipa" | tail -n 1
+
+      # Signed IPA, only when these repository secrets exist:
+      #   IOS_CERTIFICATE_P12_BASE64   base64 of the signing certificate (.p12)
+      #   IOS_CERTIFICATE_PASSWORD     its password
+      #   IOS_PROVISIONING_PROFILE_BASE64  base64 of the .mobileprovision for
+      #                                uk.co.ballfindr.app (ad hoc: installs on
+      #                                registered devices; development: on
+      #                                registered devices with a dev cert)
+      # The unsigned app is re-signed with codesign using the profile's
+      # entitlements, which avoids passing provisioning settings to the Swift
+      # package targets.
+      - name: Sign IPA
+        if: env.HAS_SIGNING == 'true'
+        env:
+          P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/sign"; mkdir -p "$work"
+          kc="$work/signing.keychain-db"; kcpw="$(openssl rand -hex 16)"
+          security create-keychain -p "$kcpw" "$kc"
+          security set-keychain-settings -lut 3600 "$kc"
+          security unlock-keychain -p "$kcpw" "$kc"
+          echo "$P12_BASE64" | base64 --decode > "$work/cert.p12"
+          security import "$work/cert.p12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$kc"
+          security set-key-partition-list -S apple-tool:,apple: -k "$kcpw" "$kc" > /dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          identity="$(security find-identity -v -p codesigning "$kc" | awk 'NR == 1 { print $2 }')"
+          test -n "$identity"
+
+          echo "$PROFILE_BASE64" | base64 --decode > "$work/profile.mobileprovision"
+          security cms -D -i "$work/profile.mobileprovision" > "$work/profile.plist"
+          /usr/libexec/PlistBuddy -x -c 'Print :Entitlements' "$work/profile.plist" > "$work/entitlements.plist"
+          appid="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$work/profile.plist")"
+          echo "Profile: $(/usr/libexec/PlistBuddy -c 'Print :Name' "$work/profile.plist") ($appid)"
+          case "$appid" in
+            *.uk.co.ballfindr.app|*.\*) ;;
+            *) echo "::error::Provisioning profile is for $appid, not uk.co.ballfindr.app"; exit 1 ;;
+          esac
+
+          rm -rf ipa-signed && mkdir -p ipa-signed
+          ditto ipa-unsigned/Payload ipa-signed/Payload
+          app="ipa-signed/Payload/App.app"
+          cp "$work/profile.mobileprovision" "$app/embedded.mobileprovision"
+          if [ -d "$app/Frameworks" ]; then
+            find "$app/Frameworks" -maxdepth 1 \( -name '*.framework' -o -name '*.dylib' \) -print0 |
+              xargs -0 -I{} codesign --force --sign "$identity" --timestamp=none "{}"
+          fi
+          codesign --force --sign "$identity" --entitlements "$work/entitlements.plist" --timestamp=none "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          (cd ipa-signed && zip -qry "../dist/BallFindr-${{ needs.version.outputs.name }}-ios.ipa" Payload)
+          security delete-keychain "$kc"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-ios-device
+          path: dist/*.ipa
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub release
-    needs: [version, android, ios]
+    needs: [version, android, ios, ios-device]
     # Publish the Android beta even if the iOS Simulator build fails.
     if: ${{ always() && needs.android.result == 'success' }}
     runs-on: ubuntu-latest
@@ -230,7 +351,9 @@ jobs:
 
           **Android:** download \`BallFindr-${{ needs.version.outputs.name }}-android.apk\` on the phone, open it, and allow installs from unknown sources if asked. If an earlier BallFindr build is installed and the install fails, uninstall it first.
 
-          **iOS:** \`BallFindr-${{ needs.version.outputs.name }}-ios-simulator.zip\` runs only in the Xcode Simulator on a Mac. iPhone installs need TestFlight, which needs an Apple Developer account.
+          **iPhone:** \`BallFindr-${{ needs.version.outputs.name }}-ios-unsigned.ipa\` is not signed. Install it with a sideloading tool such as Sideloadly or AltStore, which signs it with your own Apple ID (a free Apple ID works for 7 days at a time). If a \`BallFindr-${{ needs.version.outputs.name }}-ios.ipa\` is attached, it is signed with the project's provisioning profile and installs on the devices registered in it. App Store and TestFlight builds need an Apple Developer account.
+
+          **iOS Simulator:** \`BallFindr-${{ needs.version.outputs.name }}-ios-simulator.zip\` runs in the Xcode Simulator on a Mac.
 
           Push notifications are not delivered yet: Firebase (Android) and APNs (iOS) still need to be set up.
           NOTES
