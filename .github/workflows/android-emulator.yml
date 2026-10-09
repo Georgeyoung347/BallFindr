@@ -51,11 +51,13 @@ jobs:
       - name: Capacitor sync (android)
         run: bunx cap sync android
 
+      # Only the app module: the generated Capacitor/Cordova library modules have
+      # their own (empty) test APKs with conflicting Kotlin stdlib versions.
       - name: Build app and test APKs
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug assembleDebugAndroidTest --no-daemon --stacktrace
+          ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon --stacktrace
 
       # Hardware acceleration for the emulator on GitHub's Linux runners.
       - name: Enable KVM
@@ -75,7 +77,7 @@ jobs:
           working-directory: android
           script: |
             adb logcat -c || true
-            ./gradlew connectedDebugAndroidTest --no-daemon --stacktrace || (adb logcat -d -s AndroidRuntime:E Capacitor:* PushNotifications:* > ../logcat.txt; exit 1)
+            ./gradlew :app:connectedDebugAndroidTest --no-daemon --stacktrace || (adb logcat -d -s AndroidRuntime:E Capacitor:* PushNotifications:* > ../logcat.txt; exit 1)
 
       - name: Upload test reports
         if: always()
