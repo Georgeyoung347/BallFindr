@@ -64,3 +64,18 @@ Notes:
 - Android 12+ shows its own system splash (icon on `windowSplashScreenBackground`, see
   `values/styles.xml`) before the Capacitor splash drawable; the drawables here are what the
   `@capacitor/splash-screen` plugin and older Android versions display.
+
+## Android launcher and launch-screen icons
+
+`@capacitor/assets` renders the adaptive icon layers at 48dp launcher sizes (192px at
+xxxhdpi), but adaptive layers are 108dp canvases (432px). Upscaled, the B looked blurry
+and distorted, especially on the Android 12+ launch screen. After running the generator
+above, run:
+
+```sh
+node scripts/generate-android-icons.cjs
+```
+
+It rewrites `mipmap-*/ic_launcher_foreground.png` and `ic_launcher_background.png` at
+108dp sizes, and writes `drawable-*/splash_icon.png` (288dp, B inside the 192dp circle the
+system shows), which `AppTheme.NoActionBarLaunch` uses as its launch icon.

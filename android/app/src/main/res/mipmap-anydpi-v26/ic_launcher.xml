@@ -1,12 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Solid brand colour: must fill the whole 108dp canvas (no inset), otherwise launcher
-         parallax/long-press effects reveal a transparent ring around the icon. -->
+    <!-- Both layers are full 108dp canvases (432px at xxxhdpi). The B mark sits inside the
+         66dp safe zone of the foreground, so no inset is needed. Regenerate with the script
+         described in resources/README.md. -->
     <background android:drawable="@mipmap/ic_launcher_background" />
-    <!-- @capacitor/assets renders this layer at launcher-icon (48dp) sizes, so it is inset
-         to the 72dp visible viewport; resources/icon-foreground.png keeps the mark inside
-         the 66dp safe zone of that viewport. -->
-    <foreground>
-        <inset android:drawable="@mipmap/ic_launcher_foreground" android:inset="16.7%" />
-    </foreground>
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
 </adaptive-icon>

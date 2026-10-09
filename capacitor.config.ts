@@ -55,6 +55,9 @@ const config: CapacitorConfig = {
       // the fadeOutDuration passed to hide()).
       launchFadeOutDuration: 300,
       showSpinner: false,
+      // Legacy (pre-Android 12 API) fallback only: keep the splash image's aspect ratio
+      // instead of the default FIT_XY, which stretches it to the screen shape.
+      androidScaleType: "CENTER_CROP",
     },
     StatusBar: {
       // Capacitor's "DARK" style = light icons/text for a dark background,
