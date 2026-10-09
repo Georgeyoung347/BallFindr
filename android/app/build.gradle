@@ -7,12 +7,12 @@ android {
         applicationId "uk.co.ballfindr.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        // Store version. Bump BOTH for every Play upload: versionCode must increase
-        // monotonically (integer, never reused); versionName is the user-facing string.
-        // Mirror versionName in ios/App/App.xcodeproj (MARKETING_VERSION) and bump
-        // CURRENT_PROJECT_VERSION there like versionCode.
-        versionCode 1
-        versionName "1.0"
+        // Version. Release builds get both from the git tag via
+        // .github/workflows/release.yml (-PversionName=0.1.0-beta.1 -PversionCode=10001).
+        // versionCode = MAJOR*1000000 + MINOR*10000 + PATCH*100 + BETA (final release = 99),
+        // so every beta and release sorts above the previous one.
+        versionCode((project.findProperty("versionCode") ?: "10001") as Integer)
+        versionName((project.findProperty("versionName") ?: "0.1.0-beta.1") as String)
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -20,8 +20,22 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // Release signing comes from CI secrets (see .github/workflows/release.yml).
+    // Without them the release APK is signed with the debug key so it still installs.
+    def releaseKeystore = System.getenv("BALLFINDR_KEYSTORE_FILE")
+    signingConfigs {
+        release {
+            if (releaseKeystore) {
+                storeFile file(releaseKeystore)
+                storePassword System.getenv("BALLFINDR_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("BALLFINDR_KEY_ALIAS")
+                keyPassword System.getenv("BALLFINDR_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
+            signingConfig releaseKeystore ? signingConfigs.release : signingConfigs.debug
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

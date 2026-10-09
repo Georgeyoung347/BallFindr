@@ -1,0 +1,219 @@
+# Beta and production releases.
+#
+# Push a tag like v0.1.0-beta.1 (beta, published as a GitHub pre-release) or
+# v0.1.0 (final). The tag sets the app version on both platforms:
+#   versionName / MARKETING_VERSION  <- tag without the leading "v"
+#   versionCode / build number       <- MAJOR*1000000 + MINOR*10000 + PATCH*100 + BETA
+#                                       (final release uses 99)
+#
+# Android signing: add these repository secrets for a stable release key.
+#   ANDROID_KEYSTORE_BASE64   base64 of the .jks keystore
+#   ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+# Without them the APK is signed with a throwaway debug key: it installs, but
+# each release has a different signature, so testers must uninstall the
+# previous beta before installing the next one.
+#
+# iOS: installable iPhone builds need an Apple Developer account (TestFlight).
+# Until then the release carries the Simulator build for Mac/Xcode testing.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BUN_VERSION: "1.4.2"
+
+jobs:
+  version:
+    name: Parse version from tag
+    runs-on: ubuntu-latest
+    outputs:
+      name: ${{ steps.v.outputs.name }}
+      short: ${{ steps.v.outputs.short }}
+      code: ${{ steps.v.outputs.code }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - id: v
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-beta\.([0-9]+))?$ ]]; then
+            echo "::error::Tag '$tag' must look like v0.1.0 or v0.1.0-beta.1"; exit 1
+          fi
+          major=${BASH_REMATCH[1]}; minor=${BASH_REMATCH[2]}; patch=${BASH_REMATCH[3]}; beta=${BASH_REMATCH[5]}
+          if [ -n "$beta" ]; then
+            if [ "$beta" -lt 1 ] || [ "$beta" -gt 98 ]; then echo "::error::beta number must be 1-98"; exit 1; fi
+            seq=$beta; pre=true
+          else
+            seq=99; pre=false
+          fi
+          code=$(( major*1000000 + minor*10000 + patch*100 + seq ))
+          echo "name=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "short=${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
+          echo "version ${tag#v}, code $code, prerelease $pre"
+
+  android:
+    name: Android release APK
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-36 build-tools;36.0.0 platform-tools"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Capacitor sync (android)
+        run: bunx cap sync android
+
+      - name: Prepare signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "BALLFINDR_KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "Signing with the release keystore from secrets."
+          else
+            echo "::warning::ANDROID_KEYSTORE_BASE64 not set: signing with a throwaway debug key. Testers must uninstall the previous beta before installing this one."
+          fi
+
+      - name: Build release APK
+        working-directory: android
+        env:
+          BALLFINDR_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          BALLFINDR_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          BALLFINDR_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace \
+            -PversionName="${{ needs.version.outputs.name }}" \
+            -PversionCode="${{ needs.version.outputs.code }}"
+          mkdir -p ../dist
+          cp app/build/outputs/apk/release/app-release.apk "../dist/BallFindr-${{ needs.version.outputs.name }}-android.apk"
+
+      - name: Verify APK version
+        run: |
+          aapt="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)aapt"
+          "$aapt" dump badging dist/*.apk | head -n 1
+          "$aapt" dump badging dist/*.apk | head -n 1 | grep -q "versionName='${{ needs.version.outputs.name }}'"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-android
+          path: dist/*.apk
+          if-no-files-found: error
+
+  ios:
+    name: iOS Simulator build
+    needs: version
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          major="$(xcodebuild -version | awk 'NR == 1 { print int($2) }')"
+          if [ "$major" -lt 26 ]; then
+            newest="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1 || true)"
+            if [ -n "$newest" ]; then sudo xcode-select -s "$newest/Contents/Developer"; fi
+          fi
+          xcodebuild -version
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Capacitor sync (ios)
+        run: bunx cap sync ios
+
+      - name: Build for iOS Simulator
+        run: |
+          set -o pipefail
+          xcodebuild -resolvePackageDependencies -project ios/App/App.xcodeproj -scheme App -derivedDataPath ios/App/build
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath ios/App/build \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            MARKETING_VERSION="${{ needs.version.outputs.short }}" \
+            CURRENT_PROJECT_VERSION="${{ needs.version.outputs.code }}" \
+            build
+          app="ios/App/build/Build/Products/Release-iphonesimulator/App.app"
+          /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$app/Info.plist"
+          mkdir -p dist
+          ditto -c -k --keepParent "$app" "dist/BallFindr-${{ needs.version.outputs.name }}-ios-simulator.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-ios
+          path: dist/*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: [version, android, ios]
+    # Publish the Android beta even if the iOS Simulator build fails.
+    if: ${{ always() && needs.android.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Write release notes
+        run: |
+          cat > notes.md <<NOTES
+          BallFindr ${{ needs.version.outputs.name }}
+
+          **Android:** download \`BallFindr-${{ needs.version.outputs.name }}-android.apk\` on the phone, open it, and allow installs from unknown sources if asked. If an earlier BallFindr build is installed and the install fails, uninstall it first.
+
+          **iOS:** \`BallFindr-${{ needs.version.outputs.name }}-ios-simulator.zip\` runs only in the Xcode Simulator on a Mac. iPhone installs need TestFlight, which needs an Apple Developer account.
+
+          Push notifications are not delivered yet: Firebase (Android) and APNs (iOS) still need to be set up.
+          NOTES
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: BallFindr ${{ needs.version.outputs.name }}
+          prerelease: ${{ needs.version.outputs.prerelease == 'true' }}
+          body_path: notes.md
+          generate_release_notes: true
+          files: dist/*
+          fail_on_unmatched_files: true
