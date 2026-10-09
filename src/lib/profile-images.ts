@@ -2,6 +2,7 @@
  * Profile photo/club badge storage helpers: upload to the private bucket and create signed URLs for display.
  */
 import { supabase } from "@/integrations/supabase/client";
+import { isSafeStoragePath } from "@/lib/storage-paths";
 
 export const PROFILE_IMAGES_BUCKET = "profile-images";
 export const MAX_PROFILE_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -21,8 +22,8 @@ export function validateProfileImage(file: File) {
 }
 
 export async function resolveProfileImage(path: string | null | undefined): Promise<string | null> {
-  if (!path) return null;
-  if (/^https?:\/\//i.test(path)) return path;
+  // Only sign `<uuid>/<file>` object paths; never render a stored URL (it could log viewers' IPs).
+  if (!isSafeStoragePath(path)) return null;
   const { data, error } = await supabase.storage
     .from(PROFILE_IMAGES_BUCKET)
     .createSignedUrl(path, 60 * 60);
@@ -45,11 +46,11 @@ async function replaceObject(userId: string, slot: ProfileImageSlot, file: File,
     upsert: false,
   });
   if (error) throw error;
-  return { path, oldPath: oldPath && !/^https?:\/\//i.test(oldPath) ? oldPath : null };
+  return { path, oldPath: isSafeStoragePath(oldPath, userId) ? oldPath : null };
 }
 
 async function removeObjects(paths: Array<string | null | undefined>) {
-  const stored = paths.filter((path): path is string => Boolean(path && !/^https?:\/\//i.test(path)));
+  const stored = paths.filter((path): path is string => isSafeStoragePath(path));
   if (!stored.length) return;
   await supabase.storage.from(PROFILE_IMAGES_BUCKET).remove(stored);
 }

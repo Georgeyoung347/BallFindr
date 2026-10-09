@@ -3,6 +3,7 @@
  */
 import { createServerFn } from "@tanstack/react-start";
 import { createClient } from "@supabase/supabase-js";
+import { isSafeStoragePath } from "@/lib/storage-paths";
 
 /** Deliberately minimal: no id, location, bio, looking-for, club, height or history. */
 export type PublicPlayer = {
@@ -34,9 +35,12 @@ function publicClient() {
   });
 }
 
-/** Profile images live in a private bucket; sign only the single image path the safe lookup returned. */
-async function signImage(path: unknown): Promise<string | null> {
-  if (typeof path !== "string" || !path) return null;
+/**
+ * Profile images live in a private bucket; sign only the single image path the safe lookup returned,
+ * and only when it is a plain `<uuid>/<file>` object path (inside `ownerId`'s folder when known).
+ */
+async function signImage(path: unknown, ownerId?: unknown): Promise<string | null> {
+  if (!isSafeStoragePath(path, typeof ownerId === "string" ? ownerId : null)) return null;
   try {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { data } = await supabaseAdmin.storage.from("profile-images").createSignedUrl(path, 60 * 60 * 24 * 7);
@@ -56,7 +60,7 @@ async function rpc(fn: "get_public_player" | "get_public_club" | "get_public_vac
 async function shapeClub(raw: Record<string, unknown> | null): Promise<PublicClub | null> {
   if (!raw) return null;
   const { badgePath, ...rest } = raw;
-  return { ...(rest as unknown as PublicClub), badgeUrl: await signImage(badgePath) };
+  return { ...(rest as unknown as PublicClub), badgeUrl: await signImage(badgePath, raw["id"]) };
 }
 
 export const getPublicPlayer = createServerFn({ method: "GET" })

@@ -26,6 +26,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { requireAdminContext } from "./admin.functions";
+import { isSafeStoragePath } from "./storage-paths";
 
 export const deleteAccountPermanently = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -85,7 +86,10 @@ export const deleteAccountPermanently = createServerFn({ method: "POST" })
     });
 
     // Stored files: profile images and any uploaded media.
-    const profileFiles = [profile.avatar_path, profile.cover_path].filter(Boolean) as string[];
+    // Only delete objects inside this account's own folder: stored paths are user-written.
+    const profileFiles = [profile.avatar_path, profile.cover_path].filter((p): p is string =>
+      isSafeStoragePath(p, profile.id),
+    );
     if (profile.account_type === "club") {
       const { data: club } = await admin
         .from("clubs")
@@ -93,7 +97,7 @@ export const deleteAccountPermanently = createServerFn({ method: "POST" })
         .eq("id", profile.id)
         .maybeSingle();
       for (const path of Object.values(club ?? {})) {
-        if (typeof path === "string" && path) profileFiles.push(path);
+        if (isSafeStoragePath(path, profile.id)) profileFiles.push(path);
       }
     }
     if (profileFiles.length) {
@@ -107,7 +111,8 @@ export const deleteAccountPermanently = createServerFn({ method: "POST" })
       .eq("owner_profile_id", profile.id);
     const byBucket = new Map<string, string[]>();
     for (const row of (media ?? []) as { bucket: string; storage_path: string }[]) {
-      if (!row.storage_path) continue;
+      if (row.bucket !== "player-media" || !isSafeStoragePath(row.storage_path, profile.id))
+        continue;
       const list = byBucket.get(row.bucket) ?? [];
       list.push(row.storage_path);
       byBucket.set(row.bucket, list);

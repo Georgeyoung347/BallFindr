@@ -4,6 +4,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@supabase/supabase-js";
 import { FALLBACK_SHARE_IMAGE } from "@/lib/share";
+import { isSafeStoragePath } from "@/lib/storage-paths";
 
 /**
  * Permanent social-preview image for a public player photo or club badge.
@@ -28,7 +29,9 @@ export const Route = createFileRoute("/api/public/share-image/$kind/$slug")({
           const { data, error } = await pub.rpc(fn as never, { _slug: slug } as never);
           const raw = (data ?? null) as Record<string, unknown> | null;
           const path = raw?.[kind === "player" ? "avatarPath" : "badgePath"];
-          if (error || typeof path !== "string" || !path) return fallback();
+          // Club lookups include the owner id; player lookups deliberately do not.
+          const ownerId = kind === "club" && typeof raw?.["id"] === "string" ? raw["id"] : null;
+          if (error || !isSafeStoragePath(path, ownerId)) return fallback();
           const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
           const { data: file } = await supabaseAdmin.storage.from("profile-images").download(path);
           if (!file || !file.type.startsWith("image/")) return fallback();
