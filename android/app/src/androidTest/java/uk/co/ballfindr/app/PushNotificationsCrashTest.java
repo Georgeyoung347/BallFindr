@@ -2,7 +2,6 @@ package uk.co.ballfindr.app;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
@@ -35,9 +34,26 @@ public class PushNotificationsCrashTest {
             super(null, "PushNotifications", "test", methodName, new JSObject());
         }
 
+        // resolve() and resolve(data) call the message handler directly (there is
+        // none in this test), so every completion path is overridden here.
         @Override
         public void successCallback(PluginResult successResult) {
             outcome = "resolved";
+        }
+
+        @Override
+        public void resolve() {
+            outcome = "resolved";
+        }
+
+        @Override
+        public void resolve(JSObject data) {
+            outcome = "resolved";
+        }
+
+        @Override
+        public void errorCallback(String msg) {
+            outcome = "rejected: " + msg;
         }
 
         @Override
@@ -86,7 +102,10 @@ public class PushNotificationsCrashTest {
                 }
             });
 
-            assertNull("register/unregister threw (this is the sign-in crash): " + thrown.get(), thrown.get());
+            if (thrown.get() != null) {
+                Throwable cause = thrown.get().getCause() != null ? thrown.get().getCause() : thrown.get();
+                throw new AssertionError("register/unregister threw (this is the sign-in crash): " + cause, cause);
+            }
             assertNotNull("register must finish the call", register.outcome);
             assertNotNull("unregister must finish the call", unregister.outcome);
 
