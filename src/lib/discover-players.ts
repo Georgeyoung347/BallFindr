@@ -13,6 +13,7 @@ import type { DbAvailability, DbPosition } from "@/lib/player-profile";
 import { resolveProfileImage } from "@/lib/profile-images";
 import { fetchMyFootballSection } from "@/lib/football-section";
 import { isPlayerCoreInfoComplete } from "@/lib/profile-completion";
+import { chunk, IN_FILTER_CHUNK } from "@/lib/chunk";
 
 export interface DiscoverPlayer {
   id: string;
@@ -75,32 +76,60 @@ export async function fetchDiscoverPlayers(): Promise<DiscoverPlayer[]> {
   // player_cards is the single controlled read path: it returns location, bio,
   // looking_for, training preferences and travel distance only to the player
   // themself, club accounts and admins, and never exposes date_of_birth.
-  let playerQuery = supabase
-    .from("player_cards")
-    .select(
+  const buildPlayerQuery = () => {
+    let playerQuery = supabase.from("player_cards").select(
       `id, display_name, avatar_path, location, current_club_name, level_id, level_name,
          preferred_level_id, preferred_level_name, primary_position, secondary_positions,
          availability, open_to_trials, bio, looking_for, height_inches, age, preferred_training_days`,
     );
-  if (mySection) playerQuery = playerQuery.eq("football_section", mySection);
-  // Admin-hidden players are left out of discovery (not banned).
-  playerQuery = playerQuery.eq("is_hidden", false);
+    if (mySection) playerQuery = playerQuery.eq("football_section", mySection);
+    // Admin-hidden players are left out of discovery (not banned).
+    playerQuery = playerQuery.eq("is_hidden", false);
+    return playerQuery;
+  };
 
-  const [playerRes, profileRes] = await Promise.all([
-    playerQuery.limit(500),
-    supabase.from("profiles").select("id, verification_status, is_owner").eq("account_type", "player").limit(500),
-  ]);
+  // Page through every matching card in a stable order (a single request stops at
+  // the first 500/1000 rows and silently hides everyone after them). A fresh query
+  // per page: postgrest builders accumulate order/range parameters.
+  const PAGE_SIZE = 1000;
+  const MAX_PLAYERS = 10000;
+  const cardRows: PlayerRow[] = [];
+  for (let from = 0; from < MAX_PLAYERS; from += PAGE_SIZE) {
+    const { data, error } = await buildPlayerQuery()
+      .order("id")
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    const page = (data ?? []) as PlayerRow[];
+    cardRows.push(...page);
+    if (page.length < PAGE_SIZE) break;
+  }
+  const playerRes = { data: cardRows };
 
-  if (playerRes.error) throw playerRes.error;
-  if (profileRes.error) throw profileRes.error;
-  const verifiedIds = new Set((profileRes.data ?? []).filter((p) => p.verification_status === "verified").map((p) => p.id));
-  const ownerIds = new Set((profileRes.data ?? []).filter((p) => p.is_owner).map((p) => p.id));
-
+  // Profiles for exactly the cards returned (a separate unordered/limited
+  // profiles list could miss them), chunked to keep request URLs short.
+  const cardIds = ((playerRes.data ?? []) as PlayerRow[]).map((row) => row.id);
+  const profileRows = (
+    await Promise.all(
+      chunk(cardIds, IN_FILTER_CHUNK).map(async (ids) => {
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("id, verification_status, is_owner")
+          .eq("account_type", "player")
+          .in("id", ids);
+        if (error) throw error;
+        return data ?? [];
+      }),
+    )
+  ).flat();
+  const verifiedIds = new Set(
+    profileRows.filter((p) => p.verification_status === "verified").map((p) => p.id),
+  );
+  const ownerIds = new Set(profileRows.filter((p) => p.is_owner).map((p) => p.id));
 
   // Core Information completion is encouraged but does not affect discoverability.
   // Only accounts whose current account type is Player: a Player → Club switch keeps a
   // leftover players row, which must not appear in discovery.
-  const playerAccountIds = new Set((profileRes.data ?? []).map((p) => p.id));
+  const playerAccountIds = new Set(profileRows.map((p) => p.id));
   const mapped = ((playerRes.data ?? []) as PlayerRow[])
     .filter((row) => playerAccountIds.has(row.id))
     .map((row) => {

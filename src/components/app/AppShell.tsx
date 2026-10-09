@@ -19,8 +19,11 @@ import {
   notificationHref,
   relativeTime,
 } from "@/lib/notifications";
-import { Toaster } from "@/components/ui/sonner";
 import { useMessagingRealtime, useUnreadMessageCount } from "@/lib/messaging";
+import {
+  fetchNotificationPreferences,
+  NOTIFICATION_PREFS_QUERY_KEY,
+} from "@/lib/notification-preferences";
 import { cn } from "@/lib/utils";
 import { handleInstagramClick } from "@/lib/instagram";
 import { Avatar } from "@/components/app/ui";
@@ -182,7 +185,10 @@ function NotificationsBell({ role }: { role: "player" | "club" }) {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key !== "Escape") return;
+      // Marks it handled so the Android back button (lib/native-ui) just closes this.
+      e.preventDefault();
+      setOpen(false);
     };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
@@ -304,6 +310,23 @@ export function AppShell({
   children: ReactNode;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  // Close the mobile drawer whenever the route changes (incl. browser/Android back).
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [pathname]);
+  // Escape (and the Android back button, which lib/native-ui turns into an
+  // Escape keydown) closes the drawer; preventDefault marks it handled.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      setMenuOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [menuOpen]);
   const homeTo = role === "club" ? "/club" : "/player";
   const profileTo = role === "club" ? "/club/profile" : "/player/profile";
   const settingsTo = role === "club" ? "/club/settings" : "/player/settings";
@@ -323,20 +346,12 @@ export function AppShell({
       ? <SidebarLink item={{ label: "Moderation Dashboard", to: "/admin/reports", icon: ShieldCheck }} />
       : null;
   // Three-line menu "Notifications" reminder: shown only when all four categories are OFF.
-  // Shares the ["notification-preferences"] cache with the Settings section, so visibility
-  // updates immediately when preferences change. No row (defaults all ON) or fetch error hides it.
+  // Shares the ["notification-preferences"] cache (and fetch function) with the Settings
+  // section, so visibility updates immediately when preferences change. No row means
+  // defaults (all ON) and a fetch error leaves data undefined, both of which hide it.
   const { data: notifPrefs } = useQuery({
-    queryKey: ["notification-preferences"],
-    queryFn: async () => {
-      const { data: u } = await supabase.auth.getUser();
-      if (!u.user) return null;
-      const { data } = await (supabase as any)
-        .from("notification_preferences")
-        .select("messages, applications, trials, recruitment")
-        .eq("profile_id", u.user.id)
-        .maybeSingle();
-      return data ?? null;
-    },
+    queryKey: NOTIFICATION_PREFS_QUERY_KEY,
+    queryFn: fetchNotificationPreferences,
   });
   const allNotificationsOff =
     !!notifPrefs && !notifPrefs.messages && !notifPrefs.applications && !notifPrefs.trials && !notifPrefs.recruitment;
@@ -376,6 +391,7 @@ export function AppShell({
   const signOut = async () => {
     await deactivateCurrentDevice();
     await supabase.auth.signOut();
+    queryClient.clear(); // never show this account's cached data to the next one
     void navigate({ to: "/", replace: true });
   };
   const bottomNav = nav.slice(0, 4).concat([
@@ -548,8 +564,6 @@ export function AppShell({
           <BottomLink key={item.to} item={item} />
         ))}
       </nav>
-
-      <Toaster position="top-center" />
     </div>
   );
 }

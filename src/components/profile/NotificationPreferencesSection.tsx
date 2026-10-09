@@ -12,11 +12,13 @@ import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 import { Panel } from "@/components/app/ui";
 import { supabase } from "@/integrations/supabase/client";
-
-type PrefKey = "messages" | "applications" | "trials" | "recruitment";
-type Prefs = Record<PrefKey, boolean> & { push_enabled: boolean };
-
-const DEFAULTS: Prefs = { push_enabled: true, messages: true, applications: true, trials: true, recruitment: true };
+import {
+  fetchNotificationPreferences,
+  NOTIFICATION_PREF_DEFAULTS as DEFAULTS,
+  NOTIFICATION_PREFS_QUERY_KEY,
+  type NotificationPrefKey as PrefKey,
+  type NotificationPrefs as Prefs,
+} from "@/lib/notification-preferences";
 
 const ROWS: { key: PrefKey; label: string; body: string }[] = [
   { key: "messages", label: "Messages", body: "New messages in your conversations." },
@@ -27,21 +29,14 @@ const ROWS: { key: PrefKey; label: string; body: string }[] = [
 
 const db = supabase as any;
 
-async function fetchPrefs(): Promise<Prefs> {
-  const { data: u } = await supabase.auth.getUser();
-  if (!u.user) return DEFAULTS;
-  const { data, error } = await db
-    .from("notification_preferences")
-    .select("push_enabled, messages, applications, trials, recruitment")
-    .eq("profile_id", u.user.id)
-    .maybeSingle();
-  if (error) throw error;
-  return data ?? DEFAULTS;
-}
-
 export function NotificationPreferencesSection() {
   const qc = useQueryClient();
-  const { data: prefs = DEFAULTS, isLoading } = useQuery({ queryKey: ["notification-preferences"], queryFn: fetchPrefs });
+  const { data, isLoading } = useQuery({
+    queryKey: NOTIFICATION_PREFS_QUERY_KEY,
+    queryFn: fetchNotificationPreferences,
+  });
+  // `?? DEFAULTS` (not a destructuring default) so a cached null can never crash the switches.
+  const prefs: Prefs = data ?? DEFAULTS;
   const save = useMutation({
     mutationFn: async (next: Prefs) => {
       const { data: u } = await supabase.auth.getUser();
@@ -53,12 +48,12 @@ export function NotificationPreferencesSection() {
       return next;
     },
     onMutate: async (next) => {
-      const prev = qc.getQueryData<Prefs>(["notification-preferences"]);
-      qc.setQueryData(["notification-preferences"], next);
+      const prev = qc.getQueryData<Prefs>(NOTIFICATION_PREFS_QUERY_KEY);
+      qc.setQueryData(NOTIFICATION_PREFS_QUERY_KEY, next);
       return { prev };
     },
     onError: (_e, _n, ctx) => {
-      qc.setQueryData(["notification-preferences"], ctx?.prev ?? DEFAULTS);
+      qc.setQueryData(NOTIFICATION_PREFS_QUERY_KEY, ctx?.prev ?? DEFAULTS);
       toast.error("Couldn't save your notification settings. Please try again.");
     },
   });

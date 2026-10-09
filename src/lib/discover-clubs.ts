@@ -16,6 +16,7 @@ import { positionLabels, vacancyTitleFor } from "@/lib/club-vacancies";
 import { resolveProfileImage } from "@/lib/profile-images";
 import { toAmount, toFeePolicy, type ClubFees } from "@/lib/club-extras";
 import { fetchMyFootballSection } from "@/lib/football-section";
+import { chunk, IN_FILTER_CHUNK } from "@/lib/chunk";
 
 export interface DiscoverClub {
   id: string;
@@ -155,7 +156,7 @@ export async function fetchDiscoverResults(): Promise<DiscoverResult[]> {
   // Clubs that operate both sections appear to players on either side.
   if (mySection) clubQuery = clubQuery.in("football_section", [mySection, "both"]);
 
-  const [clubRes, vacancyRes, profileRes] = await Promise.all([
+  const [clubRes, vacancyRes] = await Promise.all([
     clubQuery.order("name"),
     supabase
       .from("vacancies")
@@ -166,20 +167,41 @@ export async function fetchDiscoverResults(): Promise<DiscoverResult[]> {
       )
       .eq("status", "active")
       .order("created_at", { ascending: false }),
-    supabase.from("profiles").select("id, verification_status, is_owner, is_hidden").eq("account_type", "club"),
   ]);
   if (clubRes.error) throw clubRes.error;
   if (vacancyRes.error) throw vacancyRes.error;
-  if (profileRes.error) throw profileRes.error;
-  const verifiedIds = new Set((profileRes.data ?? []).filter((p) => p.verification_status === "verified").map((p) => p.id));
-  const ownerIds = new Set((profileRes.data ?? []).filter((p) => p.is_owner).map((p) => p.id));
+  // Profiles for exactly the clubs and vacancy owners returned (an unbounded
+  // profiles list is silently capped by the API), chunked to keep URLs short.
+  const accountIds = [
+    ...new Set([
+      ...((clubRes.data ?? []) as { id: string }[]).map((c) => c.id),
+      ...(vacancyRes.data ?? []).map((v) => v.club_id),
+    ]),
+  ];
+  const profileRows = (
+    await Promise.all(
+      chunk(accountIds, IN_FILTER_CHUNK).map(async (ids) => {
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("id, verification_status, is_owner, is_hidden")
+          .eq("account_type", "club")
+          .in("id", ids);
+        if (error) throw error;
+        return data ?? [];
+      }),
+    )
+  ).flat();
+  const verifiedIds = new Set(
+    profileRows.filter((p) => p.verification_status === "verified").map((p) => p.id),
+  );
+  const ownerIds = new Set(profileRows.filter((p) => p.is_owner).map((p) => p.id));
 
   // Core Information completion is encouraged but does not affect discoverability.
   // Admin-hidden clubs (and their vacancies) are left out of discovery; they are not banned.
-  const hiddenIds = new Set((profileRes.data ?? []).filter((p) => p.is_hidden).map((p) => p.id));
+  const hiddenIds = new Set(profileRows.filter((p) => p.is_hidden).map((p) => p.id));
   // Only accounts whose current account type is Club: a Club → Player switch keeps a
   // leftover clubs row, which must not appear in discovery.
-  const clubAccountIds = new Set((profileRes.data ?? []).map((p) => p.id));
+  const clubAccountIds = new Set(profileRows.map((p) => p.id));
   if (vacancyRes.data)
     vacancyRes.data = vacancyRes.data.filter((v) => !hiddenIds.has(v.club_id) && clubAccountIds.has(v.club_id));
   const completeClubRows = ((clubRes.data ?? []) as unknown as (ClubRow & { match_day: string | null })[])

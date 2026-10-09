@@ -26,7 +26,7 @@ import {
   Ticket,
   MessagesSquare,
 } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
 import { getAdminStatus } from "@/lib/admin.functions";
@@ -105,6 +105,7 @@ export function AdminShell({
   children: ReactNode;
 }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const staffRole = useStaffRole();
   const visibleNav = staffRole === "moderator" ? navItems.filter((i) => "staff" in i && i.staff) : navItems;
   const [memberHome, setMemberHome] = useState<"/player" | "/club" | null>(null);
@@ -125,6 +126,7 @@ export function AdminShell({
   async function signOut() {
     await deactivateCurrentDevice();
     await supabase.auth.signOut();
+    queryClient.clear(); // never show this account's cached data to the next one
     void navigate({ to: "/admin/login", replace: true });
   }
 

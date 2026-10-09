@@ -6,7 +6,7 @@
 import { deactivateCurrentDevice } from "@/lib/push-devices";
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BadgeCheck, ChevronRight, KeyRound, Loader2, LogOut, Mail, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -224,9 +224,11 @@ function LinkRow({ to, label }: { to: "/privacy" | "/terms" | "/cookies"; label:
 
 export function SettingsPage({ accountType }: { accountType: "player" | "club" }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const signOut = async () => {
     await deactivateCurrentDevice();
     await supabase.auth.signOut();
+    queryClient.clear(); // never show this account's cached data to the next one
     void navigate({ to: "/", replace: true });
   };
   return (

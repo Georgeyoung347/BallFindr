@@ -20,8 +20,11 @@ export const Route = createFileRoute("/club/messages/$conversationId")({
       { name: "robots", content: "noindex" },
     ],
   }),
-  component: () => {
-    const { conversationId } = Route.useParams();
-    return <ConversationView conversationId={conversationId} role="club" />;
-  },
+  component: ClubConversationPage,
 });
+
+function ClubConversationPage() {
+  const { conversationId } = Route.useParams();
+  // key: remount per conversation so earlier pages, draft and dialogs never carry over.
+  return <ConversationView key={conversationId} conversationId={conversationId} role="club" />;
+}

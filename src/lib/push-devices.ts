@@ -37,6 +37,13 @@ function writeStored(v: Stored | null) {
 
 let inFlight = false;
 
+/** PostgREST/Postgres "function does not exist" (RPC not deployed yet). */
+function isMissingFunction(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  if (error.code === "PGRST202" || error.code === "42883") return true;
+  return /could not find the function|function .* does not exist/i.test(error.message ?? "");
+}
+
 /** Register this device for the currently signed-in account, if permission is already granted. */
 export async function registerCurrentDevice(): Promise<void> {
   if (!isNativeApp() || inFlight) return;
@@ -70,16 +77,26 @@ export async function registerCurrentDevice(): Promise<void> {
     const { data: again } = await supabase.auth.getUser();
     if (again.user?.id !== userId) return;
 
-    // A previous account's row on this device is deactivated at that account's
-    // sign-out (owner-only RLS prevents touching another account's row here).
-    const now = new Date().toISOString();
+    // claim_push_device (SECURITY DEFINER) deactivates any other account's row
+    // for this token and upserts ours as active, so a phone only receives the
+    // signed-in account's pushes even if the previous account never signed out.
     const platform = Capacitor.getPlatform() === "ios" ? "ios" : "android";
-    const { error } = await (supabase as any)
-      .from("push_devices")
-      .upsert(
-        { user_id: userId, token, platform, is_active: true, last_seen_at: now, updated_at: now },
-        { onConflict: "user_id,token" },
-      );
+    // Not in the generated types until they are regenerated after the migration.
+    const claim = await supabase.rpc(
+      "claim_push_device" as never,
+      { _token: token, _platform: platform } as never,
+    );
+    let error: { code?: string; message?: string } | null = claim.error;
+    if (error && isMissingFunction(error)) {
+      // Migration not applied yet: fall back to the owner-only upsert.
+      const now = new Date().toISOString();
+      ({ error } = await supabase
+        .from("push_devices")
+        .upsert(
+          { user_id: userId, token, platform, is_active: true, last_seen_at: now, updated_at: now },
+          { onConflict: "user_id,token" },
+        ));
+    }
     if (!error) writeStored({ token, userId });
   } catch {
     /* fail safely */

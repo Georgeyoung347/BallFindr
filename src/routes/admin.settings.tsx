@@ -3,7 +3,7 @@
  */
 import { deactivateCurrentDevice } from "@/lib/push-devices";
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
@@ -22,12 +22,14 @@ export const Route = createFileRoute("/admin/settings")({
 function AdminSettingsPage() {
   const { adminUser } = Route.useRouteContext();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const fetchOverview = useServerFn(getAdminOverview);
   const { data } = useQuery({ queryKey: ["admin", "overview"], queryFn: () => fetchOverview() });
 
   async function signOut() {
     await deactivateCurrentDevice();
     await supabase.auth.signOut();
+    queryClient.clear(); // never show this account's cached data to the next one
     void navigate({ to: "/admin/login", replace: true });
   }
 

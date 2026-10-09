@@ -41,8 +41,12 @@ export function shareHead(o: { title: string; description: string; path: string;
 
 /** Looks up the public link name for a record a signed-in member can already read. */
 export function useShareSlug(kind: ShareKind, id: string | null | undefined) {
-  const [slug, setSlug] = useState<string | null>(null);
+  // The slug is stored with the record it belongs to, so a changed id never
+  // shows the previous record's link (not even for the render before the effect).
+  const [found, setFound] = useState<{ key: string; slug: string | null }>({ key: "", slug: null });
+  const key = id ? `${kind}:${id}` : "";
   useEffect(() => {
+    setFound({ key, slug: null });
     if (!id) return;
     // Players/clubs read the slug-only views (id + public link name only);
     // vacancies keep their existing member-readable table.
@@ -55,13 +59,14 @@ export function useShareSlug(kind: ShareKind, id: string | null | undefined) {
       .maybeSingle()
       .then(({ data }) => {
         const value = (data as { slug?: string } | null)?.slug;
-        if (!cancelled && value) setSlug(value);
+        // Ignore a response that arrives after the id (or kind) has changed.
+        if (!cancelled && value) setFound({ key, slug: value });
       });
     return () => {
       cancelled = true;
     };
-  }, [kind, id]);
-  return slug;
+  }, [kind, id, key]);
+  return found.key === key && key ? found.slug : null;
 }
 
 // ---- Return-to-page after sign up / sign in ----
