@@ -8,11 +8,11 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         // Version. Release builds get both from the git tag via
-        // .github/workflows/release.yml (-PversionName=0.1.0-beta.1 -PversionCode=10001).
+        // .github/workflows/release.yml (-PversionName=0.1.1-beta.1 -PversionCode=10101).
         // versionCode = MAJOR*1000000 + MINOR*10000 + PATCH*100 + BETA (final release = 99),
         // so every beta and release sorts above the previous one.
-        versionCode((project.findProperty("versionCode") ?: "10001") as Integer)
-        versionName((project.findProperty("versionName") ?: "0.1.0-beta.1") as String)
+        versionCode((project.findProperty("versionCode") ?: "10101") as Integer)
+        versionName((project.findProperty("versionName") ?: "0.1.1-beta.1") as String)
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
